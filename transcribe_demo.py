@@ -12,12 +12,13 @@ from queue import Queue
 from tempfile import NamedTemporaryFile
 from time import sleep
 from sys import platform
+from faster_whisper import WhisperModel
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="medium", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large"])
+                        choices=["tiny", "base", "small", "medium", "large", "large-v1", "large-v2"])
     parser.add_argument("--non_english", action='store_true',
                         help="Don't use the english model.")
     parser.add_argument("--energy_threshold", default=1000,
@@ -66,7 +67,8 @@ def main():
     model = args.model
     if args.model != "large" and not args.non_english:
         model = model + ".en"
-    audio_model = whisper.load_model(model)
+    #audio_model = whisper.load_model(model)
+    audio_model = WhisperModel(model, device="cuda", compute_type="float16")
 
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
@@ -121,14 +123,19 @@ def main():
                     f.write(wav_data.read())
 
                 # Read the transcription.
-                result = audio_model.transcribe(temp_file, fp16=torch.cuda.is_available())
-                text = result['text'].strip()
+                #result = audio_model.transcribe(temp_file, fp16=torch.cuda.is_available())
+                segments, info = audio_model.transcribe(temp_file, beam_size=5)
+
+                text = ""
+                for segment in segments:
+                    text += segment.text.strip() + ' '
 
                 # If we detected a pause between recordings, add a new item to our transcripion.
                 # Otherwise edit the existing one.
                 if phrase_complete:
                     transcription.append(text)
                 else:
+                    ##transcription[-1] = text
                     transcription[-1] = text
 
                 # Clear the console to reprint the updated transcription.
