@@ -69,6 +69,7 @@ def main():
         model = model + ".en"
     #audio_model = whisper.load_model(model)
     audio_model = WhisperModel(model, device="cuda", compute_type="float16")
+    #audio_model = WhisperModel(model, device="cuda")
 
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
@@ -97,6 +98,10 @@ def main():
 
     while True:
         try:
+            # Infinite loops are bad for processors, must sleep.
+            while not data_queue.qsize():
+                sleep(0.1)
+
             now = datetime.utcnow()
             # Pull raw recorded audio from the queue.
             if not data_queue.empty():
@@ -124,7 +129,9 @@ def main():
 
                 # Read the transcription.
                 #result = audio_model.transcribe(temp_file, fp16=torch.cuda.is_available())
+                #segments, info = audio_model.transcribe(temp_file, beam_size=5)
                 segments, info = audio_model.transcribe(temp_file, beam_size=5)
+                #segments, info = audio_model.transcribe(temp_file, beam_size=1, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
 
                 text = ""
                 for segment in segments:
@@ -145,8 +152,10 @@ def main():
                 # Flush stdout.
                 print('', end='', flush=True)
 
-                # Infinite loops are bad for processors, must sleep.
-                sleep(0.25)
+                ## Infinite loops are bad for processors, must sleep.
+                #while not len(data_queue):
+                #    print("Sleeping")
+                #    sleep(0.25)
         except KeyboardInterrupt:
             break
 
