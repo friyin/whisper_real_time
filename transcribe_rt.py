@@ -6,6 +6,7 @@ import os
 import speech_recognition as sr
 import whisper
 import torch
+import time
 
 from datetime import datetime, timedelta
 from queue import Queue
@@ -13,6 +14,22 @@ from tempfile import NamedTemporaryFile
 from time import sleep
 from sys import platform
 from faster_whisper import WhisperModel
+
+
+
+def cls():
+    os.system('cls' if os.name=='nt' else 'clear')
+
+
+def rewrite(path, data):
+    if not path:
+        return
+
+    with open(path, "w") as f:
+        print(f" *** {datetime.now()}: lines {len(data)}", file=f)
+        f.write(os.linesep)
+        f.writelines(l + os.linesep for l in data)
+        f.write(os.linesep)
 
 
 def main():
@@ -28,6 +45,8 @@ def main():
     parser.add_argument("--phrase_timeout", default=3,
                         help="How much empty space between recordings before we "
                              "consider it a new line in the transcription.", type=float)  
+    parser.add_argument("--output_file", default="transcription.txt",
+                        help="Output text to file.", type=str)
     if 'linux' in platform:
         parser.add_argument("--default_microphone", default='pulse',
                             help="Default microphone name for SpeechRecognition. "
@@ -45,24 +64,8 @@ def main():
     recorder.energy_threshold = args.energy_threshold
     # Definitely do this, dynamic energy compensation lowers the energy threshold dramtically to a point where the SpeechRecognizer never stops recording.
     recorder.dynamic_energy_threshold = False
-    
-    # Important for linux users. 
-    # Prevents permanent application hang and crash by using the wrong Microphone
-    if 'linux' in platform:
-        mic_name = args.default_microphone
-        if not mic_name or mic_name == 'list':
-            print("Available microphone devices are: ")
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                print(f"Microphone with name \"{name}\" found")   
-            return
-        else:
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                if mic_name in name:
-                    source = sr.Microphone(sample_rate=16000, device_index=index)
-                    break
-    else:
-        source = sr.Microphone(sample_rate=16000)
         
+    source = sr.Microphone(sample_rate=16000)
     # Load / Download model
     model = args.model
     if args.model != "large" and not args.non_english:
@@ -94,14 +97,16 @@ def main():
     recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
 
     # Cue the user that we're ready to go.
-    print("Model loaded.\n")
+    cls()
+    print(f"{datetime.now()}: Model loaded. OK")
+    if args.output_file:
+        print(f"Output file: {args.output_file}")
 
     while True:
         try:
             # Infinite loops are bad for processors, must sleep.
             while not data_queue.qsize():
                 sleep(0.1)
-
             now = datetime.utcnow()
             # Pull raw recorded audio from the queue.
             if not data_queue.empty():
@@ -113,30 +118,27 @@ def main():
                     phrase_complete = True
                 # This is the last time we received new audio data from the queue.
                 phrase_time = now
-
                 # Concatenate our current audio data with the latest audio data.
                 while not data_queue.empty():
                     data = data_queue.get()
                     last_sample += data
-
                 # Use AudioData to convert the raw data to wav data.
                 audio_data = sr.AudioData(last_sample, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
                 wav_data = io.BytesIO(audio_data.get_wav_data())
-
                 # Write wav data to the temporary file as bytes.
                 with open(temp_file, 'w+b') as f:
                     f.write(wav_data.read())
-
                 # Read the transcription.
                 #result = audio_model.transcribe(temp_file, fp16=torch.cuda.is_available())
                 #segments, info = audio_model.transcribe(temp_file, beam_size=5)
+                tstart = time.time()
                 segments, info = audio_model.transcribe(temp_file, beam_size=5)
+                tend = time.time()
+                ttrans = tend - tstart
                 #segments, info = audio_model.transcribe(temp_file, beam_size=1, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
-
                 text = ""
                 for segment in segments:
                     text += segment.text.strip() + ' '
-
                 # If we detected a pause between recordings, add a new item to our transcripion.
                 # Otherwise edit the existing one.
                 if phrase_complete:
@@ -144,14 +146,15 @@ def main():
                 else:
                     ##transcription[-1] = text
                     transcription[-1] = text
-
                 # Clear the console to reprint the updated transcription.
-                os.system('cls' if os.name=='nt' else 'clear')
+                cls()
+                print(f" *** {datetime.now()}: phrase_complete {phrase_complete} lines {len(transcription)} infer_time {ttrans:.3f}s")
+
                 for line in transcription:
                     print(line)
+                rewrite(args.output_file, transcription)
                 # Flush stdout.
                 print('', end='', flush=True)
-
                 ## Infinite loops are bad for processors, must sleep.
                 #while not len(data_queue):
                 #    print("Sleeping")
@@ -159,9 +162,9 @@ def main():
         except KeyboardInterrupt:
             break
 
-    print("\n\nTranscription:")
-    for line in transcription:
-        print(line)
+    rewrite(args.output_file, transcription)
+
+    print(f" *** {datetime.now()}: transcription end")
 
 
 if __name__ == "__main__":
