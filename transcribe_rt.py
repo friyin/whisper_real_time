@@ -3,8 +3,9 @@
 import argparse
 import io
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+
 import speech_recognition as sr
-import whisper
 import torch
 import time
 
@@ -25,7 +26,7 @@ def rewrite(path, data):
     if not path:
         return
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         print(f" *** {datetime.now()}: lines {len(data)}", file=f)
         f.write(os.linesep)
         f.writelines(l + os.linesep for l in data)
