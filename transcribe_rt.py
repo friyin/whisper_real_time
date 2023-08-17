@@ -29,8 +29,11 @@ def rewrite(path, data):
     with open(path, "w", encoding="utf-8") as f:
         print(f" *** {datetime.now()}: lines {len(data)}", file=f)
         f.write(os.linesep)
-        f.writelines(l + os.linesep for l in data)
-        f.write(os.linesep)
+        #x = 0
+        for l in data:
+            f.write(l)
+            f.write(os.linesep)
+        
 
 
 def main():
@@ -46,7 +49,7 @@ def main():
     parser.add_argument("--phrase_timeout", default=3,
                         help="How much empty space between recordings before we "
                              "consider it a new line in the transcription.", type=float)  
-    parser.add_argument("--output_file", default="transcription.txt",
+    parser.add_argument("--output_file", default=None,
                         help="Output text to file.", type=str)
     if 'linux' in platform:
         parser.add_argument("--default_microphone", default='pulse',
@@ -72,7 +75,7 @@ def main():
     if args.model != "large" and not args.non_english:
         model = model + ".en"
     #audio_model = whisper.load_model(model)
-    audio_model = WhisperModel(model, device="cuda", compute_type="float16")
+    audio_model = WhisperModel(model, device="cuda")
     #audio_model = WhisperModel(model, device="cuda")
 
     record_timeout = args.record_timeout
@@ -82,7 +85,9 @@ def main():
     transcription = ['']
     
     with source:
+        print("Calibrating mic noise, stay silent...")
         recorder.adjust_for_ambient_noise(source)
+        print("OK!")
 
     def record_callback(_, audio:sr.AudioData) -> None:
         """
@@ -95,7 +100,8 @@ def main():
 
     # Create a background thread that will pass us raw audio bytes.
     # We could do this manually but SpeechRecognizer provides a nice helper.
-    recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
+    #recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
+    recorder.listen_in_background(source, record_callback)
 
     # Cue the user that we're ready to go.
     cls()
@@ -103,63 +109,71 @@ def main():
     if args.output_file:
         print(f"Output file: {args.output_file}")
 
+
     while True:
         try:
             # Infinite loops are bad for processors, must sleep.
-            while not data_queue.qsize():
-                sleep(0.1)
-            now = datetime.utcnow()
             # Pull raw recorded audio from the queue.
-            if not data_queue.empty():
-                phrase_complete = False
-                # If enough time has passed between recordings, consider the phrase complete.
-                # Clear the current working audio buffer to start over with the new data.
-                if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
-                    last_sample = bytes()
-                    phrase_complete = True
-                # This is the last time we received new audio data from the queue.
-                phrase_time = now
-                # Concatenate our current audio data with the latest audio data.
-                while not data_queue.empty():
-                    data = data_queue.get()
-                    last_sample += data
-                # Use AudioData to convert the raw data to wav data.
-                audio_data = sr.AudioData(last_sample, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
-                wav_data = io.BytesIO(audio_data.get_wav_data())
-                # Write wav data to the temporary file as bytes.
-                with open(temp_file, 'w+b') as f:
-                    f.write(wav_data.read())
-                # Read the transcription.
-                #result = audio_model.transcribe(temp_file, fp16=torch.cuda.is_available())
-                #segments, info = audio_model.transcribe(temp_file, beam_size=5)
-                tstart = time.time()
-                segments, info = audio_model.transcribe(temp_file, beam_size=5)
-                tend = time.time()
-                ttrans = tend - tstart
-                #segments, info = audio_model.transcribe(temp_file, beam_size=1, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
-                text = ""
-                for segment in segments:
-                    text += segment.text.strip() + ' '
-                # If we detected a pause between recordings, add a new item to our transcripion.
-                # Otherwise edit the existing one.
-                if phrase_complete:
-                    transcription.append(text)
-                else:
-                    ##transcription[-1] = text
-                    transcription[-1] = text
-                # Clear the console to reprint the updated transcription.
-                cls()
-                print(f" *** {datetime.now()}: phrase_complete {phrase_complete} lines {len(transcription)} infer_time {ttrans:.3f}s")
+            if data_queue.empty():
+                sleep(0.1)
+                continue
 
-                for line in transcription:
-                    print(line)
-                rewrite(args.output_file, transcription)
-                # Flush stdout.
-                print('', end='', flush=True)
-                ## Infinite loops are bad for processors, must sleep.
-                #while not len(data_queue):
-                #    print("Sleeping")
-                #    sleep(0.25)
+            now = datetime.utcnow()
+            phrase_complete = False
+            # If enough time has passed between recordings, consider the phrase complete.
+            # Clear the current working audio buffer to start over with the new data.
+            if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
+                last_sample = bytes()
+                phrase_complete = True
+            # This is the last time we received new audio data from the queue.
+            phrase_time = now
+            # Concatenate our current audio data with the latest audio data.
+            #while not data_queue.empty():
+            #    data = data_queue.get()
+            #    last_sample += data
+
+            last_sample = data_queue.get()
+            # Use AudioData to convert the raw data to wav data.
+            audio_data = sr.AudioData(last_sample, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
+            wav_data = io.BytesIO(audio_data.get_wav_data())
+            # Write wav data to the temporary file as bytes.
+            with open(temp_file, 'w+b') as f:
+                f.write(wav_data.read())
+            # Read the transcription.
+            #result = audio_model.transcribe(temp_file, fp16=torch.cuda.is_available())
+            #segments, info = audio_model.transcribe(temp_file, beam_size=5)
+            tstart = time.time()
+            segments, info = audio_model.transcribe(temp_file, beam_size=10)
+            #segments, info = audio_model.transcribe(temp_file, beam_size=5, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
+            tend = time.time()
+            ttrans = tend - tstart
+            #segments, info = audio_model.transcribe(temp_file, beam_size=1, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
+            text = ""
+            for segment in segments:
+                text += segment.text.strip() + ' '
+            # If we detected a pause between recordings, add a new item to our transcripion.
+            # Otherwise edit the existing one.
+            #if phrase_complete:
+            #    transcription.append(text)
+            #else:
+            #    ##transcription[-1] = text
+            #    transcription[-1] = text
+            if text.strip():
+                transcription.append(text)
+
+            # Clear the console to reprint the updated transcription.
+            cls()
+            print(f" *** {datetime.now()}: phrase_complete {phrase_complete} lines {len(transcription)} infer_time {ttrans:.3f}s")
+
+            for line in transcription:
+                print(line)
+            rewrite(args.output_file, transcription)
+            # Flush stdout.
+            print('', end='', flush=True)
+            ## Infinite loops are bad for processors, must sleep.
+            #while not len(data_queue):
+            #    print("Sleeping")
+            #    sleep(0.25)
         except KeyboardInterrupt:
             break
 
